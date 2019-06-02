@@ -19,3 +19,8 @@ org.apache.nifi.processors.gcp.storage.ListGCSBucket
 org.apache.nifi.processors.gcp.pubsub.PublishGCPubSub
 org.apache.nifi.processors.gcp.pubsub.ConsumeGCPubSub
 org.apache.nifi.processors.gcp.bigquery.PutBigQueryBatch
+org.apache.nifi.processors.gcp.bigquery.ExecuteBigQuerySQL
+org.apache.nifi.processors.gcp.bigquery.ExecuteBigQuerySQLScript
+org.apache.nifi.processors.gcp.bigquery.ExtractBigQueryTable
+org.apache.nifi.processors.gcp.bigquery.LoadBigQueryTable
+org.apache.nifi.processors.gcp.bigquery.CopyBigQueryTable
