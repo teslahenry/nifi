@@ -16,14 +16,8 @@
  */
 package org.apache.nifi.processors.standard;
 
-import org.apache.nifi.annotation.behavior.DynamicProperty;
-import org.apache.nifi.annotation.behavior.InputRequirement;
+import org.apache.nifi.annotation.behavior.*;
 import org.apache.nifi.annotation.behavior.InputRequirement.Requirement;
-import org.apache.nifi.annotation.behavior.PrimaryNodeOnly;
-import org.apache.nifi.annotation.behavior.Stateful;
-import org.apache.nifi.annotation.behavior.TriggerSerially;
-import org.apache.nifi.annotation.behavior.WritesAttribute;
-import org.apache.nifi.annotation.behavior.WritesAttributes;
 import org.apache.nifi.annotation.documentation.CapabilityDescription;
 import org.apache.nifi.annotation.documentation.SeeAlso;
 import org.apache.nifi.annotation.documentation.Tags;
@@ -47,8 +41,10 @@ import java.util.Set;
 import static org.apache.nifi.processors.standard.util.JdbcProperties.USE_AVRO_LOGICAL_TYPES;
 
 
-@TriggerSerially
-@InputRequirement(Requirement.INPUT_FORBIDDEN)
+//@TriggerSerially
+//@InputRequirement(Requirement.INPUT_FORBIDDEN)
+@EventDriven
+@InputRequirement(Requirement.INPUT_ALLOWED)
 @Tags({"sql", "select", "jdbc", "query", "database", "record"})
 @SeeAlso({GenerateTableFetch.class, ExecuteSQL.class})
 @CapabilityDescription("Generates a SQL select query, or uses a provided statement, and executes it to fetch all rows whose values in the specified "

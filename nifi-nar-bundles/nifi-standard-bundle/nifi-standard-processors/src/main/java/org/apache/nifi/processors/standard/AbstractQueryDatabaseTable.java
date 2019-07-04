@@ -94,7 +94,7 @@ public abstract class AbstractQueryDatabaseTable extends AbstractDatabaseFetchPr
             .defaultValue("0")
             .required(true)
             .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
-            .expressionLanguageSupported(ExpressionLanguageScope.VARIABLE_REGISTRY)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .build();
 
     public static final PropertyDescriptor MAX_ROWS_PER_FLOW_FILE = new PropertyDescriptor.Builder()
@@ -105,7 +105,7 @@ public abstract class AbstractQueryDatabaseTable extends AbstractDatabaseFetchPr
             .defaultValue("0")
             .required(true)
             .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
-            .expressionLanguageSupported(ExpressionLanguageScope.VARIABLE_REGISTRY)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .build();
 
     public static final PropertyDescriptor OUTPUT_BATCH_SIZE = new PropertyDescriptor.Builder()
@@ -119,7 +119,7 @@ public abstract class AbstractQueryDatabaseTable extends AbstractDatabaseFetchPr
             .defaultValue("0")
             .required(true)
             .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
-            .expressionLanguageSupported(ExpressionLanguageScope.VARIABLE_REGISTRY)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .build();
 
     public static final PropertyDescriptor MAX_FRAGMENTS = new PropertyDescriptor.Builder()
@@ -131,7 +131,7 @@ public abstract class AbstractQueryDatabaseTable extends AbstractDatabaseFetchPr
             .defaultValue("0")
             .required(true)
             .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
-            .expressionLanguageSupported(ExpressionLanguageScope.VARIABLE_REGISTRY)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
             .build();
 
     public static final PropertyDescriptor TRANS_ISOLATION_LEVEL = new PropertyDescriptor.Builder()
@@ -181,21 +181,45 @@ public abstract class AbstractQueryDatabaseTable extends AbstractDatabaseFetchPr
         if (!setupComplete.get()) {
             super.setup(context);
         }
-        ProcessSession session = sessionFactory.createSession();
+
+        final ProcessSession session = sessionFactory.createSession();
+        try {
+            onTrigger(context, session);
+            session.commit();
+        } catch (final Throwable t) {
+            session.rollback(true);
+            throw t;
+        }
+    }
+
+    public void onTrigger(final ProcessContext context, final ProcessSession session) throws ProcessException {
+        FlowFile _fileToProcess = null;
+        if (context.hasIncomingConnection()) {
+            _fileToProcess = session.get();
+
+            // If we have no FlowFile, and all incoming connections are self-loops then we can continue on.
+            // However, if we have no FlowFile and we have connections coming from other Processors, then
+            // we know that we should run only if we have a FlowFile.
+            if (_fileToProcess == null && context.hasNonLoopConnection()) {
+                return;
+            }
+        } else {
+            _fileToProcess = session.create();
+        }
         final List<FlowFile> resultSetFlowFiles = new ArrayList<>();
 
         final ComponentLog logger = getLogger();
 
         final DBCPService dbcpService = context.getProperty(DBCP_SERVICE).asControllerService(DBCPService.class);
         final DatabaseAdapter dbAdapter = dbAdapters.get(context.getProperty(DB_TYPE).getValue());
-        final String tableName = context.getProperty(TABLE_NAME).evaluateAttributeExpressions().getValue();
-        final String columnNames = context.getProperty(COLUMN_NAMES).evaluateAttributeExpressions().getValue();
-        final String sqlQuery = context.getProperty(SQL_QUERY).evaluateAttributeExpressions().getValue();
-        final String maxValueColumnNames = context.getProperty(MAX_VALUE_COLUMN_NAMES).evaluateAttributeExpressions().getValue();
-        final String customWhereClause = context.getProperty(WHERE_CLAUSE).evaluateAttributeExpressions().getValue();
-        final Integer fetchSize = context.getProperty(FETCH_SIZE).evaluateAttributeExpressions().asInteger();
-        final Integer maxRowsPerFlowFile = context.getProperty(MAX_ROWS_PER_FLOW_FILE).evaluateAttributeExpressions().asInteger();
-        final Integer outputBatchSizeField = context.getProperty(OUTPUT_BATCH_SIZE).evaluateAttributeExpressions().asInteger();
+        final String tableName = context.getProperty(TABLE_NAME).evaluateAttributeExpressions(_fileToProcess).getValue();
+        final String columnNames = context.getProperty(COLUMN_NAMES).evaluateAttributeExpressions(_fileToProcess).getValue();
+        final String sqlQuery = context.getProperty(SQL_QUERY).evaluateAttributeExpressions(_fileToProcess).getValue();
+        final String maxValueColumnNames = context.getProperty(MAX_VALUE_COLUMN_NAMES).evaluateAttributeExpressions(_fileToProcess).getValue();
+        final String customWhereClause = context.getProperty(WHERE_CLAUSE).evaluateAttributeExpressions(_fileToProcess).getValue();
+        final Integer fetchSize = context.getProperty(FETCH_SIZE).evaluateAttributeExpressions(_fileToProcess).asInteger();
+        final Integer maxRowsPerFlowFile = context.getProperty(MAX_ROWS_PER_FLOW_FILE).evaluateAttributeExpressions(_fileToProcess).asInteger();
+        final Integer outputBatchSizeField = context.getProperty(OUTPUT_BATCH_SIZE).evaluateAttributeExpressions(_fileToProcess).asInteger();
         final int outputBatchSize = outputBatchSizeField == null ? 0 : outputBatchSizeField;
         final Integer maxFragments = context.getProperty(MAX_FRAGMENTS).isSet()
                 ? context.getProperty(MAX_FRAGMENTS).evaluateAttributeExpressions().asInteger()
@@ -203,6 +227,9 @@ public abstract class AbstractQueryDatabaseTable extends AbstractDatabaseFetchPr
         final Integer transIsolationLevel = context.getProperty(TRANS_ISOLATION_LEVEL).isSet()
                 ? context.getProperty(TRANS_ISOLATION_LEVEL).asInteger()
                 : null;
+
+        // Remove incoming flowfile
+        session.remove(_fileToProcess);
 
         SqlWriter sqlWriter = configureSqlWriter(session, context);
 
