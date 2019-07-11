@@ -1,7 +1,11 @@
 package org.apache.nifi.processors.gcp.bigquery;
 
+import com.google.api.services.storage.model.StorageObject;
 import com.google.cloud.RetryOption;
 import com.google.cloud.bigquery.*;
+import com.google.cloud.storage.Blob;
+import com.google.cloud.storage.BlobId;
+import com.google.cloud.storage.Storage;
 import com.google.common.collect.ImmutableList;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -26,6 +30,8 @@ import org.threeten.bp.temporal.ChronoUnit;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 
 @InputRequirement(InputRequirement.Requirement.INPUT_REQUIRED)
@@ -57,7 +63,7 @@ public class LoadBigQueryTable extends AbstractBigQueryProcessor {
     private static final PropertyDescriptor SOURCE_URIS = new PropertyDescriptor.Builder()
             .name("SourceUris")
             .displayName("Source Uris")
-            .description("The sourceUris property indicates the location(s) and file name(s) where BigQuery will read your files. Ref: https://cloud.google.com/bigquery/docs/exporting-data")
+            .description("The sourceUris property indicates the location(s) and file name(s) where BigQuery will read your files. Ref: https://cloud.google.com/bigquery/docs/loading-data-cloud-storage")
             .required(true)
             .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
@@ -82,6 +88,27 @@ public class LoadBigQueryTable extends AbstractBigQueryProcessor {
             .addValidator(StandardValidators.BOOLEAN_VALIDATOR)
             .allowableValues("true", "false")
             .defaultValue("false")
+            .build();
+
+    public static final PropertyDescriptor COMPLETION_STRATEGY = new PropertyDescriptor.Builder()
+            .name("CompletionStrategy")
+            .displayName("Completion Strategy")
+            .description("Specifies what to do with the original file on the file system once it has been pulled into NiFi")
+            .required(true)
+            .allowableValues("None", "Move File", "Delete File")
+            .defaultValue("None")
+            .addValidator(FORMAT_VALIDATOR)
+            .build();
+
+    public static final PropertyDescriptor MOVE_DESTINATION_URI = new PropertyDescriptor.Builder()
+            .name("MoveDestinationDirectory")
+            .displayName("Move Destination Directory")
+            .description("The directory to the move the original file to once it has been fetched from the file system. This property is ignored unless the Completion Strategy is set to \"Move File\". If the directory does not exist, it will be created.\n" +
+                    "Supports Expression Language: true (will be evaluated using flow file attributes and variable registry)")
+            .required(false)
+            .defaultValue("${config.movedestdir}")
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .addValidator(StandardValidators.NON_EMPTY_VALIDATOR)
             .build();
 
     public static final PropertyDescriptor IGNORE_UNKNOWN = new PropertyDescriptor.Builder()
@@ -187,6 +214,8 @@ public class LoadBigQueryTable extends AbstractBigQueryProcessor {
                 .add(SOURCE_URIS)
                 .add(SOURCE_TYPE)
                 .add(AUTO_DETECT_SCHEMA)
+                .add(COMPLETION_STRATEGY)
+                .add(MOVE_DESTINATION_URI)
                 .add(CREATE_DISPOSITION)
                 .add(WRITE_DISPOSITION)
                 .add(MAXBAD_RECORDS)
@@ -219,6 +248,8 @@ public class LoadBigQueryTable extends AbstractBigQueryProcessor {
         final String sourceUris = context.getProperty(SOURCE_URIS).evaluateAttributeExpressions(flowFile).getValue().trim();
         final String type = context.getProperty(SOURCE_TYPE).evaluateAttributeExpressions(flowFile).getValue();
         final Boolean autoDetectSchema = context.getProperty(AUTO_DETECT_SCHEMA).evaluateAttributeExpressions().asBoolean();
+        final String completionStrategy = context.getProperty(COMPLETION_STRATEGY).getValue();
+        final String moveDestinationUri = context.getProperty(MOVE_DESTINATION_URI).evaluateAttributeExpressions(flowFile).getValue();
 
         final TableId tableId;
         if (StringUtils.isEmpty(projectId)) {
@@ -229,6 +260,10 @@ public class LoadBigQueryTable extends AbstractBigQueryProcessor {
 
         try {
             List<String> listSourceUri = new ArrayList<>();
+            // NOTE:
+            // You can use only one wildcard for objects (filenames) within your bucket.
+            // The wildcard can appear inside the object name or at the end of the object name.
+            // Appending a wildcard to the bucket name is unsupported.
             if (sourceUris.startsWith("[") && sourceUris.endsWith("]")) {
                 Gson gson = new GsonBuilder().create();
                 listSourceUri = gson.fromJson(sourceUris, ArrayList.class);
@@ -254,16 +289,19 @@ public class LoadBigQueryTable extends AbstractBigQueryProcessor {
 
             // build schema
             final Schema schema = BigQueryUtils.schemaFromString(context.getProperty(TABLE_SCHEMA).evaluateAttributeExpressions(flowFile).getValue());
-            LoadJobConfiguration configuration = LoadJobConfiguration
+
+            LoadJobConfiguration.Builder confBuidler = LoadJobConfiguration
                     .newBuilder(tableId, listSourceUri)
                     .setCreateDisposition(JobInfo.CreateDisposition.valueOf(context.getProperty(CREATE_DISPOSITION).getValue()))
                     .setWriteDisposition(JobInfo.WriteDisposition.valueOf(context.getProperty(WRITE_DISPOSITION).getValue()))
                     .setIgnoreUnknownValues(context.getProperty(IGNORE_UNKNOWN).asBoolean())
                     .setMaxBadRecords(context.getProperty(MAXBAD_RECORDS).asInteger())
-                    .setSchema(schema)
                     .setFormatOptions(formatOption)
-                    .setAutodetect(autoDetectSchema)
-                    .build();
+                    .setAutodetect(autoDetectSchema);
+            if (schema != null) {
+                confBuidler.setSchema(schema);
+            }
+            LoadJobConfiguration configuration = confBuidler.build();
 
             Job job = getCloudService().create(JobInfo.of(configuration));
 
@@ -297,6 +335,10 @@ public class LoadBigQueryTable extends AbstractBigQueryProcessor {
                         if (job.getStatistics() instanceof JobStatistics.LoadStatistics) {
                             final JobStatistics.LoadStatistics stats = (JobStatistics.LoadStatistics) job.getStatistics();
                             attributes.put(BigQueryAttributes.JOB_NB_RECORDS_ATTR, Long.toString(stats.getOutputRows()));
+                            attributes.put("bq.records.badrecords", Long.toString(stats.getBadRecords()));
+                            attributes.put("bq.records.inputfiles", Long.toString(stats.getInputFiles()));
+                            attributes.put("bq.records.outputbytes", Long.toString(stats.getOutputBytes()));
+                            attributes.put("bq.records.inoutbytes", Long.toString(stats.getInputBytes()));
                         }
                     }
 
@@ -313,8 +355,11 @@ public class LoadBigQueryTable extends AbstractBigQueryProcessor {
                         session.transfer(flowFile, REL_SUCCESS);
                     }
                 }
-            } catch (InterruptedException e) {
+            } catch (InterruptedException ex) {
                 // Handle interrupted wait
+                getLogger().log(LogLevel.ERROR, ex.getMessage(), ex);
+                flowFile = session.penalize(flowFile);
+                session.transfer(flowFile, REL_FAILURE);
             }
 
         } catch (Exception ex) {
