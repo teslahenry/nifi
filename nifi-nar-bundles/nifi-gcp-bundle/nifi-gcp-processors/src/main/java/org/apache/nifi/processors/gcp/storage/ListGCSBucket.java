@@ -106,8 +106,9 @@ import static org.apache.nifi.processors.gcp.storage.StorageAttributes.URI_DESC;
  */
 @PrimaryNodeOnly
 @TriggerSerially
-@TriggerWhenEmpty
-@InputRequirement(Requirement.INPUT_FORBIDDEN)
+//@TriggerWhenEmpty
+//@InputRequirement(Requirement.INPUT_FORBIDDEN)
+@InputRequirement(Requirement.INPUT_ALLOWED)
 @Tags({"google cloud", "google", "storage", "gcs", "list"})
 @CapabilityDescription("Retrieves a listing of objects from an GCS bucket. For each object that is listed, creates a FlowFile that represents "
         + "the object so that it can be fetched in conjunction with FetchGCSObject. This Processor is designed to run on Primary Node only "
