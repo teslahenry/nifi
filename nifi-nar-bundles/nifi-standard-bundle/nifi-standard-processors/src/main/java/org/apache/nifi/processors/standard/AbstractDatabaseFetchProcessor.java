@@ -466,7 +466,7 @@ public abstract class AbstractDatabaseFetchProcessor extends AbstractSessionFact
      * @param value The value to be converted to a SQL literal
      * @return A String representing the given value as a literal of the given type
      */
-    protected static String getLiteralByType(int type, String value, String databaseType) {
+    protected static String getLiteralByType(int type, String value, String databaseType, Integer delayTime) {
         // Format value based on column type. For example, strings and timestamps need to be quoted
         switch (type) {
             // For string-represented values, put in single quotes
@@ -501,6 +501,9 @@ public abstract class AbstractDatabaseFetchProcessor extends AbstractSessionFact
                     if (value.matches("\\d{4}-\\d{2}-\\d{2}")) {
                         return "date '" + value + "'";
                     } else {
+                        // adjust maximum-value
+                        Long _value = Long.valueOf(value) - delayTime;
+                        value = _value.toString();
                         return "timestamp '" + value + "'";
                     }
                 } else {

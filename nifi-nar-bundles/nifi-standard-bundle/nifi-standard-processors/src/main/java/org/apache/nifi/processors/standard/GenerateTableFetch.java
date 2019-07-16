@@ -116,6 +116,17 @@ import java.util.stream.IntStream;
         + "specified in the flow files.")
 public class GenerateTableFetch extends AbstractDatabaseFetchProcessor {
 
+    public static final PropertyDescriptor DELAY_TIME = new PropertyDescriptor.Builder()
+            .name("delay-time")
+            .displayName("Delay Time")
+            .description("The delay time will be used to adjust the Maximum-value columns -> [new Maximum-value] = [old Maximum-value] - [Delay-time]." +
+                    "Only apply for Date/Timestamp type columns.")
+            .defaultValue("0")
+            .required(true)
+            .expressionLanguageSupported(ExpressionLanguageScope.FLOWFILE_ATTRIBUTES)
+            .addValidator(StandardValidators.NON_NEGATIVE_INTEGER_VALIDATOR)
+            .build();
+
     public static final PropertyDescriptor PARTITION_SIZE = new PropertyDescriptor.Builder()
             .name("gen-table-fetch-partition-size")
             .displayName("Partition Size")
@@ -172,6 +183,7 @@ public class GenerateTableFetch extends AbstractDatabaseFetchProcessor {
         pds.add(TABLE_NAME);
         pds.add(COLUMN_NAMES);
         pds.add(MAX_VALUE_COLUMN_NAMES);
+        pds.add(DELAY_TIME);
         pds.add(QUERY_TIMEOUT);
         pds.add(PARTITION_SIZE);
         pds.add(COLUMN_FOR_VALUE_PARTITIONING);
@@ -256,6 +268,7 @@ public class GenerateTableFetch extends AbstractDatabaseFetchProcessor {
         final String tableName = context.getProperty(TABLE_NAME).evaluateAttributeExpressions(fileToProcess).getValue();
         final String columnNames = context.getProperty(COLUMN_NAMES).evaluateAttributeExpressions(fileToProcess).getValue();
         final String maxValueColumnNames = context.getProperty(MAX_VALUE_COLUMN_NAMES).evaluateAttributeExpressions(fileToProcess).getValue();
+        final int delayTime = context.getProperty(DELAY_TIME).evaluateAttributeExpressions(fileToProcess).asInteger();
         final int partitionSize = context.getProperty(PARTITION_SIZE).evaluateAttributeExpressions(fileToProcess).asInteger();
         final String columnForPartitioning = context.getProperty(COLUMN_FOR_VALUE_PARTITIONING).evaluateAttributeExpressions(fileToProcess).getValue();
         final boolean useColumnValsForPaging = !StringUtils.isEmpty(columnForPartitioning);
@@ -336,7 +349,7 @@ public class GenerateTableFetch extends AbstractDatabaseFetchProcessor {
                     Integer type = getColumnType(tableName, colName, dbAdapter);
 
                     // Add a condition for the WHERE clause
-                    maxValueClauses.add(colName + (index == 0 ? " > " : " >= ") + getLiteralByType(type, maxValue, dbAdapter.getName()));
+                    maxValueClauses.add(colName + (index == 0 ? " > " : " >= ") + getLiteralByType(type, maxValue, dbAdapter.getName(), delayTime));
                 }
 
             });
@@ -436,7 +449,7 @@ public class GenerateTableFetch extends AbstractDatabaseFetchProcessor {
                         Integer type = getColumnType(tableName, colName, dbAdapter);
 
                         // Add a condition for the WHERE clause
-                        maxValueClauses.add(colName + " <= " + getLiteralByType(type, maxValue, dbAdapter.getName()));
+                        maxValueClauses.add(colName + " <= " + getLiteralByType(type, maxValue, dbAdapter.getName(), delayTime));
                     }
                 });
 
